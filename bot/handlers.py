@@ -58,15 +58,28 @@ async def consult_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ],
         [
             InlineKeyboardButton("❓ Другое", callback_data="category_other")
+        ],
+        [
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
         ]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        welcome_text,
-        reply_markup=reply_markup
-    )
+    # Проверяем, вызвано ли из callback query или обычного message
+    if update.callback_query:
+        # Вызвано из callback query (например, из главного меню)
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(
+            welcome_text,
+            reply_markup=reply_markup
+        )
+    else:
+        # Вызвано из обычного сообщения (команда /consult)
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=reply_markup
+        )
     
     return ConsultationStates.CATEGORY_SELECTION.value
 
@@ -507,20 +520,70 @@ async def end_consultation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Обработчик возврата в главное меню
+    Обработчик возврата в главное меню с inline-кнопками
     """
     query = update.callback_query
     await query.answer()
     
+    user = update.effective_user
+    user_name = user.first_name if user.first_name else "пользователь"
+    
     welcome_message = (
-        "🤖 Добро пожаловать в AI-юриста!\n\n"
-        "Доступные команды:\n"
-        "• /consult - Юридические консультации\n"
-        "• /create - Создание документов\n"
-        "• /analyze - Анализ документов\n"
-        "• /subscribe - Оформление подписки\n\n"
-        "Для начала работы выберите нужную команду."
+        f"🏛️ **AI-Юрист** — ваш персональный правовой помощник\n\n"
+        f"👋 Привет, {user_name}!\n\n"
+        
+        "🎯 **Проверенный сервис:**\n"
+        "• 6 отраслей права\n"
+        "• 40+ типов документов\n"
+        "• Экспорт в Word\n"
+        "• Консультаций проведено: 500+\n\n"
+        
+        "💼 **Выберите нужную услугу:**"
     )
     
-    await query.message.reply_text(welcome_message)
+    # Создаем клавиатуру главного меню
+    keyboard = [
+        [InlineKeyboardButton("💬 Юридическая консультация", callback_data="menu_consult")],
+        [InlineKeyboardButton("📄 Создание документов", callback_data="menu_create")],
+        [InlineKeyboardButton("📊 Анализ документов", callback_data="menu_analyze")],
+        [InlineKeyboardButton("ℹ️ Справка и поддержка", callback_data="menu_help")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.message.reply_text(
+        welcome_message,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
     return ConversationHandler.END
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда помощи - показывает доступные команды"""
+    user = update.effective_user
+    user_name = user.first_name if user.first_name else "пользователь"
+    
+    help_text = f"""
+👋 Привет, {user_name}!
+
+🤖 **AI Lawyer Bot** - ваш персональный юридический помощник
+
+📋 **Доступные команды:**
+
+/start - Начать работу с ботом
+/help - Показать эту справку
+/consult - Получить юридическую консультацию
+/create - Создать юридический документ
+
+💡 **Возможности бота:**
+
+🔹 **Консультации** - получите профессиональные ответы на правовые вопросы по различным отраслям права
+🔹 **Создание документов** - автоматическое составление договоров, исков, претензий и других юридических документов
+🔹 **Экспорт в Word** - готовые документы в формате .docx для дальнейшего использования
+
+📞 **Поддержка:** @your_support_bot
+"""
+    
+    await update.message.reply_text(help_text)

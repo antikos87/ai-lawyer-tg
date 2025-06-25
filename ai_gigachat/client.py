@@ -252,6 +252,73 @@ class GigaChatClient:
             logger.error(f"Ошибка тестирования соединения с GigaChat: {e}")
             return False
 
+    async def generate_document(self, system_prompt: str, user_prompt: str) -> str:
+        """
+        Генерация юридического документа с помощью GigaChat
+        """
+        try:
+            # Используем специальный системный промпт для генерации документов
+            full_system_prompt = f"""{system_prompt}
+
+ВАЖНЫЕ ТРЕБОВАНИЯ:
+- Создай полноценный юридический документ
+- Используй профессиональную юридическую терминологию
+- Соблюдай структуру документа согласно российскому законодательству
+- Все поля должны быть заполнены на основе предоставленных данных
+- Добавь текущую дату в нужном формате
+- Документ должен быть готов к использованию"""
+            
+            # Создаём сообщения для модели
+            messages = [
+                Messages(
+                    role=MessagesRole.SYSTEM,
+                    content=full_system_prompt
+                ),
+                Messages(
+                    role=MessagesRole.USER,
+                    content=user_prompt
+                )
+            ]
+            
+            # Отправляем запрос к GigaChat
+            chat_request = Chat(
+                messages=messages,
+                temperature=0.5,  # Меньше творчества для документов
+                max_tokens=3000   # Больше токенов для документов
+            )
+            
+            response = await asyncio.to_thread(self.client.chat, chat_request)
+            
+            # Получаем ответ
+            if response.choices and len(response.choices) > 0:
+                generated_document = response.choices[0].message.content
+                return generated_document
+            else:
+                return self._get_document_fallback()
+                
+        except Exception as e:
+            logger.error(f"Ошибка при генерации документа: {e}")
+            return self._get_document_fallback()
+    
+    
+    def _get_document_fallback(self) -> str:
+        """
+        Возвращает базовый шаблон документа в случае ошибки
+        """
+        return """ДОКУМЕНТ
+        
+К сожалению, произошла техническая ошибка при генерации документа.
+        
+Рекомендуем:
+1. Проверить корректность введенных данных
+2. Повторить попытку через несколько минут
+3. Обратиться к юристу для ручного составления документа
+
+Приносим извинения за временные неудобства.
+
+Дата: ______________
+Подпись: ______________"""
+
 
 # Глобальный экземпляр клиента
 gigachat_client = GigaChatClient()
