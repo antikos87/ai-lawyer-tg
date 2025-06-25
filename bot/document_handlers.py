@@ -472,9 +472,27 @@ async def back_to_types(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     await query.answer()
     
-    # Имитируем команду /create
-    update.message = query.message
-    return await create_command(update, context)
+    # Очищаем текущий выбор
+    context.user_data.pop('document_type', None)
+    context.user_data.pop('document_subtype', None)
+    
+    # Показываем выбор типов документов
+    keyboard = []
+    for doc_type, doc_info in DOCUMENT_TYPES.items():
+        keyboard.append([InlineKeyboardButton(doc_info["name"], callback_data=f"doctype_{doc_type}")])
+    
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_document")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.message.reply_text(
+        "📋 **Выберите тип документа для создания:**\n\n"
+        "Каждый тип документа имеет свои особенности и требования. "
+        "Выберите подходящий вариант:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    return DocumentStates.DOCUMENT_TYPE_SELECTION.value
 
 
 async def back_to_subtypes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -483,9 +501,32 @@ async def back_to_subtypes(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     
     doc_type = context.user_data['document_type']
-    query.data = f"doctype_{doc_type}"
+    doc_info = DOCUMENT_TYPES[doc_type]
     
-    return await document_type_selected(update, context)
+    # Очищаем выбранный подтип
+    context.user_data.pop('document_subtype', None)
+    
+    # Показываем подтипы для выбранного типа
+    keyboard = []
+    for subtype_key, subtype_name in doc_info["subtypes"].items():
+        keyboard.append([InlineKeyboardButton(subtype_name, callback_data=f"docsubtype_{subtype_key}")])
+    
+    keyboard.extend([
+        [InlineKeyboardButton("⬅️ Назад к типам", callback_data="back_to_types")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_document")]
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.message.reply_text(
+        f"📄 **{doc_info['name']}**\n\n"
+        f"{doc_info['description']}\n\n"
+        "**Выберите подтип документа:**",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    return DocumentStates.DOCUMENT_SUBTYPE_SELECTION.value
 
 
 async def cancel_document_creation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -496,10 +537,18 @@ async def cancel_document_creation(update: Update, context: ContextTypes.DEFAULT
     context.user_data.pop('document_subtype', None)
     context.user_data.pop('generated_document', None)
     
-    await update.message.reply_text(
-        "❌ Создание документа отменено.\n"
-        "Для создания нового документа используйте /create"
-    )
+    # Определяем откуда пришел запрос - callback или сообщение
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(
+            "❌ Создание документа отменено.\n"
+            "Для создания нового документа используйте /create"
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Создание документа отменено.\n"
+            "Для создания нового документа используйте /create"
+        )
     return ConversationHandler.END
 
 
