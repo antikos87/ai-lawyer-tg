@@ -1,0 +1,62 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Project Rules for AI Lawyer Telegram Bot
+Overview
+
+Language: Python 3.8+
+Purpose: Telegram bot for legal consultations, document generation, and analysis with paid subscriptions
+
+Libraries
+
+python-telegram-bot: Telegram API integration
+gigachat: Text generation and document analysis
+yookassa: Payment processing
+supabase-py: Database and storage
+PyPDF2: PDF handling
+python-docx: DOCX handling
+
+Project Structure
+
+main.py: Entry point
+config.py: Configuration (tokens, keys)
+bot/: Handlers, states, utils
+gigachat/: GigaChat API client and prompts
+yookassa/: Payment and webhook logic
+supabase/: Database and storage operations
+templates/: Document templates
+
+Coding Style
+
+Follow PEP8
+Functions/variables: snake_case
+Classes: CamelCase
+Comments: Russian
+Use type hints
+
+API Integration
+
+Telegram: Commands (/start, /consult, /create, /analyze, /subscribe), ConversationHandler for dialogs
+GigaChat: Text generation and analysis
+YooKassa: Payment links and webhooks
+Supabase: Users, payments, documents storage
+
+UX Guidelines
+
+Inline keyboards for options
+Multi-step dialogs for document creation
+File upload for analysis
+
+Deployment
+
+Target: Heroku or AWS
+Use virtual environment
+Secure keys in config.py
+
+Testing
+
+Unit tests for functions
+Integration tests for API interactions
+

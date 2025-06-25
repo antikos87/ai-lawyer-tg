@@ -1,0 +1,233 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GigaChat API Documentation
+
+## Авторизация
+
+### Получение токена
+```
+POST https://ngw.devices.sberbank.ru:9443/api/v2/oauth
+Headers:
+- Authorization: Basic <base64(client_id:client_secret)>
+- RqUID: <uuid4>
+- Content-Type: application/x-www-form-urlencoded
+
+Body: scope=GIGACHAT_API_PERS|GIGACHAT_API_B2B|GIGACHAT_API_CORP
+```
+
+### Использование токена
+```
+Authorization: Bearer <access_token>
+```
+Токен действует 30 минут, можно запрашивать до 10 раз в секунду.
+
+## Основные методы
+
+### Chat Completions
+```
+POST /api/v1/chat/completions
+```
+
+**Обязательные поля:**
+- `model`: "GigaChat", "GigaChat-Pro", "GigaChat-Max"
+- `messages`: массив сообщений
+
+**Роли сообщений:**
+- `system`: системный промпт
+- `user`: сообщение пользователя  
+- `assistant`: ответ модели
+- `function`: результат работы функции
+
+**Дополнительные параметры:**
+- `temperature`: 0-2 (креативность)
+- `max_tokens`: лимит токенов
+- `stream`: потоковая передача
+- `function_call`: "auto", "none", {"name": "func_name"}
+- `functions`: массив пользовательских функций
+- `attachments`: массив ID файлов
+
+### Работа с файлами
+
+**Загрузка файла:**
+```
+POST /api/v1/files
+Content-Type: multipart/form-data
+```
+
+**Поддерживаемые форматы:**
+- Текст: txt, doc, docx, pdf, epub, ppt, pptx (до 40 МБ)
+- Изображения: jpeg, png, tiff, bmp (до 15 МБ)
+
+**Получение списка файлов:**
+```
+GET /api/v1/files
+```
+
+**Скачивание файла:**
+```
+GET /api/v1/files/{file_id}/content
+```
+
+### Embeddings
+```
+POST /api/v1/embeddings
+{
+  "model": "Embeddings" | "EmbeddingsGigaR",
+  "input": ["текст для эмбеддинга"]
+}
+```
+
+### Подсчет токенов
+```
+POST /api/v1/tokens/count
+{
+  "model": "GigaChat",
+  "input": ["текст для подсчета"]
+}
+```
+
+## Работа с функциями
+
+### Встроенные функции
+- `text2image`: генерация изображений
+- `text2model3d`: генерация 3D-моделей
+
+### Структура пользовательской функции
+```json
+{
+  "name": "function_name",
+  "description": "Описание функции",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "param1": {
+        "type": "string",
+        "description": "Описание параметра"
+      }
+    },
+    "required": ["param1"]
+  },
+  "return_parameters": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "few_shot_examples": [
+    {
+      "request": "Пример запроса",
+      "params": {
+        "param1": "значение"
+      }
+    }
+  ]
+}
+```
+
+### Валидация функций
+```
+POST /api/v1/functions/validate
+```
+
+## Структуры данных
+
+### Сообщение
+```json
+{
+  "role": "user|assistant|system|function",
+  "content": "текст сообщения",
+  "attachments": ["file_id"],
+  "functions_state_id": "uuid"
+}
+```
+
+### Ответ чата
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "ответ модели",
+        "function_call": {
+          "name": "function_name",
+          "arguments": {}
+        }
+      },
+      "finish_reason": "stop|length|function_call|blacklist|error"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  }
+}
+```
+
+## Потоковая передача
+
+При `"stream": true` используется Server-Sent Events:
+```
+data: {"choices": [{"delta": {"content": "часть"}}]}
+data: [DONE]
+```
+
+## Ограничения
+
+- Максимум 10 изображений в запросе
+- Общий размер запроса до 20 МБ
+- Контекст модели ограничен
+- Лимиты на количество запросов
+
+## Коды ошибок
+
+- 400: Некорректный формат запроса
+- 401: Ошибка авторизации
+- 404: Модель не найдена
+- 422: Ошибка валидации
+- 429: Слишком много запросов
+- 500: Внутренняя ошибка сервера
+
+## Примеры для AI-юриста
+
+### Юридическая консультация
+```python
+messages = [
+    {"role": "system", "content": "Ты — опытный юрист, специализирующийся на российском праве."},
+    {"role": "user", "content": "Вопрос пользователя"}
+]
+```
+
+### Анализ документа
+```python
+# Загрузить файл, получить file_id
+messages = [
+    {"role": "system", "content": "Проанализируй юридический документ."},
+    {"role": "user", "content": "Проанализируй этот договор", "attachments": [file_id]}
+]
+```
+
+### Создание документа
+```python
+functions = [
+    {
+        "name": "create_contract",
+        "description": "Создание договора",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "contract_type": {"type": "string"},
+                "parties": {"type": "array"},
+                "terms": {"type": "object"}
+            }
+        }
+    }
+]
+```
+
