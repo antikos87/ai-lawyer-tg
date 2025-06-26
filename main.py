@@ -25,6 +25,11 @@ from bot.document_handlers import (
     back_to_types, back_to_subtypes, cancel_document_creation
 )
 
+from bot.analysis_handlers import (
+    AnalysisStates, analyze_command, handle_document_upload, handle_analysis_type_selection,
+    handle_additional_actions, cancel_analysis
+)
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -200,29 +205,28 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         
     elif query.data == "menu_analyze":
-        # Анализ документов (будущая функция)
+        # Переход к анализу документов
         analyze_text = (
             "📊 **Анализ документов**\n\n"
             "🔍 Профессиональная проверка и экспертное заключение по вашим документам\n\n"
             
-            "📄 **Что можно анализировать:**\n"
-            "• Договоры на соответствие закону\n"
-            "• Исковые заявления\n"
-            "• Претензии и жалобы\n"
-            "• Деловую переписку\n\n"
+            "📄 **Поддерживаемые форматы:**\n"
+            "• Документы: DOC, DOCX, PDF\n"
+            "• Изображения: JPG, PNG (сканы)\n"
+            "• Максимальный размер: 10 МБ\n\n"
             
-            "⚙️ **Возможности:**\n"
-            "• Поиск юридических ошибок\n"
-            "• Рекомендации по улучшению\n"
+            "🎯 **Типы анализа:**\n"
+            "• Соответствие закону\n"
+            "• Поиск ошибок и недочетов\n"
             "• Оценка правовых рисков\n"
-            "• Соответствие требованиям\n\n"
+            "• Рекомендации по улучшению\n"
+            "• Анализ деловой переписки\n\n"
             
-            "🚧 **Статус:** Функция находится в разработке\n"
-            "📅 **Запуск:** Планируется в ближайших обновлениях"
+            "Для начала анализа используйте:"
         )
         
         keyboard = [
-            [InlineKeyboardButton("🔔 Уведомить о готовности", callback_data="notify_analyze")],
+            [InlineKeyboardButton("▶️ Начать анализ", callback_data="start_analyze")],
             [InlineKeyboardButton("⬅️ Главное меню", callback_data="back_to_main")]
         ]
         
@@ -317,6 +321,14 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "⏰ Ожидаемый срок: 2-3 недели"
         )
     
+    elif query.data == "start_analyze":
+        # Запуск анализа документов
+        await analyze_command(update, context)
+    
+    elif query.data == "analyze":
+        # Запуск анализа документов (из кнопки после создания документа)
+        await analyze_command(update, context)
+    
     elif query.data == "detailed_help":
         # Подробная справка
         await help_command(update, context)
@@ -403,6 +415,7 @@ def main() -> None:
                 CallbackQueryHandler(handle_document_rating, pattern="^rate_"),
                 CallbackQueryHandler(handle_document_rating, pattern="^skip_rating$"),
                 CallbackQueryHandler(create_command, pattern="^new_document$"),
+                CallbackQueryHandler(lambda update, context: analyze_command(update, context), pattern="^analyze$"),
                 CallbackQueryHandler(consult_command, pattern="^consultation$"),
                 CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")
             ]
@@ -414,11 +427,47 @@ def main() -> None:
         ]
     )
     
+    # ConversationHandler для анализа документов
+    analysis_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("analyze", analyze_command),
+            CallbackQueryHandler(lambda update, context: analyze_command(update, context), pattern='^start_analyze$')
+        ],
+        states={
+            AnalysisStates.DOCUMENT_UPLOAD.value: [
+                MessageHandler(filters.Document.ALL | filters.PHOTO, handle_document_upload),
+                CallbackQueryHandler(cancel_analysis, pattern="^cancel_analysis$")
+            ],
+            AnalysisStates.ANALYSIS_TYPE_SELECTION.value: [
+                CallbackQueryHandler(handle_analysis_type_selection, pattern="^analysis_type_"),
+                CallbackQueryHandler(cancel_analysis, pattern="^cancel_analysis$")
+            ],
+            AnalysisStates.TEXT_PROCESSING.value: [
+                # Промежуточное состояние, автоматически переходит дальше
+            ],
+            AnalysisStates.ANALYSIS_PROCESSING.value: [
+                # Промежуточное состояние, автоматически переходит дальше
+            ],
+            AnalysisStates.RESULTS_REVIEW.value: [
+                CallbackQueryHandler(handle_additional_actions, pattern="^change_analysis_type$"),
+                CallbackQueryHandler(handle_additional_actions, pattern="^upload_new_document$"),
+                CallbackQueryHandler(handle_additional_actions, pattern="^finish_analysis$"),
+                CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")
+            ]
+        },
+        fallbacks=[
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(cancel_analysis, pattern="^cancel_analysis$"),
+            CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")
+        ]
+    )
+    
     # Регистрируем обработчики
     application.add_handler(CommandHandler('start', start_command))
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(consultation_handler)
     application.add_handler(document_conv_handler)
+    application.add_handler(analysis_conv_handler)
     
     # Обработчик для callback query вне conversations
     application.add_handler(CallbackQueryHandler(main_menu_handler))
