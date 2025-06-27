@@ -543,13 +543,15 @@ async def cancel_document_creation(update: Update, context: ContextTypes.DEFAULT
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.message.reply_text(
-            "❌ Создание документа отменено.\n"
-            "Для создания нового документа используйте /create"
+            "❌ **Документ отменен**\n\n"
+            "Создание документа прервано.\n\n"
+            "Используйте кнопки ниже для выбора действий."
         )
+        return ConversationHandler.END
     else:
         await update.message.reply_text(
             "❌ Создание документа отменено.\n"
-            "Для создания нового документа используйте /create"
+            "Используйте кнопки ниже для выбора действий."
         )
     return ConversationHandler.END
 

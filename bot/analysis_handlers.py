@@ -48,9 +48,14 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 
 # Типы анализа (соответствуют ключам в GigaChat клиенте)
 ANALYSIS_TYPES = {
+    'document_summary': {
+        'name': '📋 Краткое описание',
+        'description': 'Краткое описание содержания и назначения документа',
+        'icon': '📋'
+    },
     'law_compliance': {
-        'name': '⚖️ Проверить соответствие закону',
-        'description': 'Проверка документа на соответствие действующему законодательству РФ',
+        'name': '⚖️ Проверка соответствия закону',
+        'description': 'Анализ соответствия документа действующему законодательству РФ',
         'icon': '⚖️'
     },
     'error_detection': {
@@ -170,19 +175,24 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
         
         # Проверяем расширение файла
         file_extension = os.path.splitext(file_name.lower())[1]
-        if file_extension not in SUPPORTED_EXTENSIONS['document']:
+        
+        # Если это изображение, обрабатываем как изображение
+        if file_extension in SUPPORTED_EXTENSIONS['image']:
+            file_type = 'image'
+        elif file_extension in SUPPORTED_EXTENSIONS['document']:
+            file_type = 'document'
+        else:
             await update.message.reply_text(
                 f"❌ **Неподдерживаемый формат**\n\n"
                 f"Файл: `{file_name}`\n"
                 f"Формат: `{file_extension}`\n\n"
-                "Поддерживаемые форматы документов:\n"
-                "• DOC, DOCX, PDF\n\n"
+                "Поддерживаемые форматы:\n"
+                "• **Документы:** DOC, DOCX, PDF\n"
+                "• **Изображения:** JPG, PNG, BMP, TIFF\n\n"
                 "Пожалуйста, загрузите файл в поддерживаемом формате.",
                 parse_mode='Markdown'
             )
             return AnalysisStates.DOCUMENT_UPLOAD.value
-        
-        file_type = 'document'
         
     # Обработка изображения
     else:  # photo
@@ -214,30 +224,108 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
         'file_type': file_type
     }
     
-    # Подтверждение загрузки
-    success_text = (
-        f"✅ **Файл успешно загружен**\n\n"
-        f"📄 **Файл:** `{file_name}`\n"
-        f"📏 **Размер:** {file_size / 1024:.1f} КБ\n"
-        f"📝 **Тип:** {'Документ' if file_type == 'document' else 'Изображение (скан)'}\n\n"
-        "Выберите тип анализа:"
+    # Показываем индикатор обработки
+    processing_message = await update.message.reply_text(
+        "🔄 **Обрабатываю документ...**\n\n"
+        "📥 Загружаю файл...",
+        parse_mode='Markdown'
     )
     
-    # Создаем клавиатуру с типами анализа
-    keyboard = []
-    for analysis_type, info in ANALYSIS_TYPES.items():
-        keyboard.append([InlineKeyboardButton(
-            info['name'], 
-            callback_data=f"analysis_type_{analysis_type}"
-        )])
+    try:
+        # Обновляем статус
+        await processing_message.edit_text(
+            "🔄 **Обрабатываю документ...**\n\n"
+            f"📄 {'🖼️ Сканирую изображение...' if file_type == 'image' else '📝 Извлекаю текст из файла...'}\n"
+            "⏳ *Это может занять несколько секунд*",
+            parse_mode='Markdown'
+        )
+        
+        # Извлекаем текст из файла
+        extracted_text = await extract_text_from_file(context.user_data['file_info'])
+        
+        # Для изображений (OCR) проверяем менее строго
+        min_length = 3 if file_type == 'image' else 10
+        
+        if not extracted_text or len(extracted_text.strip()) < min_length:
+            # Если это изображение и OCR вернул предупреждение, все равно продолжаем
+            if file_type == 'image' and extracted_text and "OCR распознал очень мало текста" in extracted_text:
+                pass  # Продолжаем с предупреждением
+            else:
+                # Создаем клавиатуру с навигацией для ошибки
+                error_keyboard = [
+                    [InlineKeyboardButton("🔄 Попробовать еще раз", callback_data="retry_upload")],
+                    [InlineKeyboardButton("🔙 Назад к выбору файла", callback_data="back_to_upload")],
+                    [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+                ]
+                
+                await processing_message.edit_text(
+                    "❌ **Ошибка обработки файла**\n\n"
+                    "Не удалось извлечь текст из документа.\n\n"
+                    "**Возможные причины:**\n"
+                    "• Плохое качество скана\n"
+                    "• Поврежденный файл\n"
+                    "• Документ не содержит текста\n\n"
+                    "**Что можно сделать:**\n"
+                    "• Попробовать загрузить файл заново\n"
+                    "• Использовать изображение лучшего качества\n"
+                    "• Попробовать другой формат файла",
+                    reply_markup=InlineKeyboardMarkup(error_keyboard),
+                    parse_mode='Markdown'
+                )
+                return AnalysisStates.DOCUMENT_UPLOAD.value
+        
+        # Сохраняем извлеченный текст
+        context.user_data['document_text'] = extracted_text
+        
+        # Финальное обновление с результатом
+        file_icon = "🖼️" if file_type == 'image' else "📄"
+        success_text = "✅ **Документ обработан успешно!**\n\n"
+        
+        if file_type == 'image':
+            success_text += f"{file_icon} **Изображение:** {file_name}\n"
+            success_text += f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
+            success_text += f"🔤 **Текст распознан:** {len(extracted_text)} символов\n"
+            if "OCR распознал очень мало текста" in extracted_text:
+                success_text += "\n⚠️ *Распознано мало текста, но анализ возможен*"
+        else:
+            success_text += f"{file_icon} **Файл:** {file_name}\n"
+            success_text += f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
+            success_text += f"📝 **Текст извлечен:** {len(extracted_text)} символов"
+        
+        await processing_message.edit_text(
+            success_text,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        # Создаем клавиатуру с навигацией для критической ошибки
+        error_keyboard = [
+            [InlineKeyboardButton("🔄 Попробовать еще раз", callback_data="retry_upload")],
+            [InlineKeyboardButton("🔙 Назад к выбору файла", callback_data="back_to_upload")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+        ]
+        
+        await processing_message.edit_text(
+            "❌ **Критическая ошибка обработки**\n\n"
+            "Произошла непредвиденная ошибка при обработке файла.\n\n"
+            "**Попробуйте:**\n"
+            "• Загрузить файл заново\n"
+            "• Использовать другой формат\n"
+            "• Обратиться в поддержку если проблема повторяется",
+            reply_markup=InlineKeyboardMarkup(error_keyboard),
+            parse_mode='Markdown'
+        )
+        return AnalysisStates.DOCUMENT_UPLOAD.value
     
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_analysis")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Предлагаем выбрать тип анализа
+    keyboard = create_analysis_keyboard()
     
     await update.message.reply_text(
-        success_text,
-        reply_markup=reply_markup,
+        f"📄 **Документ получен:** {file_name}\n\n"
+        f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
+        f"📝 **Текст извлечен:** {len(extracted_text)} символов\n\n"
+        "**Выберите тип анализа:**",
+        reply_markup=keyboard,
         parse_mode='Markdown'
     )
     
@@ -251,32 +339,226 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
     query = update.callback_query
     await query.answer()
     
-    # Извлекаем тип анализа
-    analysis_type = query.data.replace("analysis_type_", "")
+    if query.data.startswith("analysis_type_"):
+        # Выбор типа анализа
+        analysis_type = query.data.replace("analysis_type_", "")
+        
+        if analysis_type not in ANALYSIS_TYPES:
+            await query.answer("❌ Неизвестный тип анализа")
+            return
+        
+        # Сохраняем выбранный тип анализа
+        context.user_data['analysis_type'] = analysis_type
+        
+        # Если это краткое описание, сразу запускаем анализ
+        if analysis_type == 'document_summary':
+            # НЕ УДАЛЯЕМ предыдущее сообщение! Добавляем новое
+            progress_msg = await query.message.reply_text("⏳ Создаю краткое описание документа...")
+            
+            # Получаем текст документа
+            document_text = context.user_data.get('document_text', '')
+            if not document_text:
+                await query.message.reply_text("❌ Текст документа не найден. Попробуйте загрузить файл заново.")
+                return
+            
+            try:
+                # Выполняем анализ
+                analysis_result = await gigachat_client.analyze_document(
+                    document_text, 
+                    analysis_type
+                )
+                
+                # Обновляем прогресс сообщение
+                await progress_msg.edit_text("✅ Краткое описание готово!")
+                
+                # Устанавливаем флаг что краткое описание выполнено
+                context.user_data['summary_done'] = True
+                
+                # Создаем клавиатуру с остальными типами анализа
+                keyboard = create_other_analysis_keyboard()
+                
+                await query.message.reply_text(
+                    analysis_result,
+                    reply_markup=keyboard,
+                    parse_mode='Markdown'
+                )
+                return
+            except Exception as e:
+                await query.message.reply_text(
+                    "❌ **Ошибка анализа**\n\n"
+                    "Произошла ошибка при создании краткого описания.\n"
+                    "Попробуйте повторить попытку.",
+                    parse_mode='Markdown'
+                )
+                return
+        
+        # Для остальных типов анализа
+        analysis_info = ANALYSIS_TYPES[analysis_type]
+        
+        # Если краткое описание уже было сделано, сразу запускаем анализ
+        if context.user_data.get('summary_done'):
+            # НЕ УДАЛЯЕМ предыдущие сообщения! Добавляем новое
+            progress_msg = await query.message.reply_text("⏳ Выполняю анализ документа...")
+            
+            # Получаем текст документа
+            document_text = context.user_data.get('document_text') or context.user_data.get('extracted_text', '')
+            if not document_text:
+                await query.message.reply_text("❌ Текст документа не найден. Попробуйте загрузить файл заново.")
+                return
+            
+            try:
+                # Выполняем анализ
+                analysis_result = await gigachat_client.analyze_document(
+                    document_text, 
+                    analysis_type
+                )
+                
+                # Обновляем прогресс сообщение
+                await progress_msg.edit_text("✅ Анализ завершен!")
+                
+                # Создаем клавиатуру для завершения или выбора другого анализа
+                keyboard = [
+                    [InlineKeyboardButton("📊 Другой тип анализа", callback_data="back_to_analysis_types")],
+                    [InlineKeyboardButton("✅ Завершить", callback_data="finish_analysis")]
+                ]
+                
+                await query.message.reply_text(
+                    analysis_result,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                return
+            except Exception as e:
+                await query.message.reply_text(
+                    "❌ **Ошибка анализа**\n\n"
+                    "Произошла ошибка при анализе документа.\n"
+                    "Попробуйте повторить попытку или выбрать другой тип анализа.",
+                    parse_mode='Markdown'
+                )
+                return
+        
+        # Для первичного выбора (без краткого описания) показываем подтверждение
+        keyboard = [
+            [InlineKeyboardButton("✅ Начать анализ", callback_data="start_analysis")],
+            [InlineKeyboardButton("🔙 Выбрать другой тип", callback_data="back_to_analysis_types")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel_analysis")]
+        ]
+        
+        # НЕ УДАЛЯЕМ предыдущие сообщения! Добавляем новое
+        await query.message.reply_text(
+            f"**{analysis_info['icon']} {analysis_info['name']}**\n\n"
+            f"{analysis_info['description']}\n\n"
+            "Начать анализ?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+    elif query.data == "start_analysis":
+        # Начать анализ после подтверждения
+        progress_msg = await query.message.reply_text("⏳ Выполняю анализ документа...")
+        
+        # Получаем данные из контекста
+        analysis_type = context.user_data.get('analysis_type')
+        # Пробуем получить текст из разных переменных (для совместимости)
+        document_text = context.user_data.get('document_text') or context.user_data.get('extracted_text', '')
+        
+        if not analysis_type or not document_text:
+            await query.message.reply_text("❌ Данные для анализа не найдены. Попробуйте загрузить файл заново.")
+            return
+        
+        try:
+            # Выполняем анализ
+            analysis_result = await gigachat_client.analyze_document(
+                document_text, 
+                analysis_type
+            )
+            
+            # Обновляем прогресс сообщение
+            await progress_msg.edit_text("✅ Анализ завершен!")
+            
+            # Создаем клавиатуру для завершения или выбора другого анализа
+            keyboard = [
+                [InlineKeyboardButton("📊 Другой тип анализа", callback_data="back_to_analysis_types")],
+                [InlineKeyboardButton("✅ Завершить", callback_data="finish_analysis")]
+            ]
+            
+            await query.message.reply_text(
+                analysis_result,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            await query.message.reply_text(
+                "❌ **Ошибка анализа**\n\n"
+                "Произошла ошибка при анализе документа.\n"
+                "Попробуйте:\n"
+                "• Повторить анализ через минуту\n"
+                "• Выбрать другой тип анализа\n"
+                "• Обратиться в поддержку\n\n"
+                "Что делаем дальше?",
+                parse_mode='Markdown'
+            )
+            return AnalysisStates.RESULTS_REVIEW.value
     
-    if analysis_type not in ANALYSIS_TYPES:
-        await query.message.reply_text("❌ Неизвестный тип анализа")
-        return AnalysisStates.ANALYSIS_TYPE_SELECTION.value
+    elif query.data == "back_to_analysis_types":
+        # Вернуться к выбору типа анализа
+        # Проверяем, было ли уже выполнено краткое описание
+        if context.user_data.get('summary_done'):
+            # Если краткое описание уже было, показываем остальные типы
+            keyboard = create_other_analysis_keyboard()
+        else:
+            # Если краткого описания не было, показываем полную клавиатуру
+            keyboard = create_analysis_keyboard()
+        
+        # НЕ УДАЛЯЕМ предыдущие сообщения! Добавляем новое
+        await query.message.reply_text(
+            "**Выберите тип анализа:**",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
     
-    # Сохраняем выбранный тип анализа
-    context.user_data['analysis_type'] = analysis_type
-    analysis_info = ANALYSIS_TYPES[analysis_type]
+    elif query.data == "change_analysis_type":
+        # ДОБАВЛЯЮ ОТСУТСТВУЮЩИЙ ОБРАБОТЧИК!
+        # Проверяем, было ли уже выполнено краткое описание
+        if context.user_data.get('summary_done'):
+            keyboard = create_other_analysis_keyboard()
+        else:
+            keyboard = create_analysis_keyboard()
+        
+        await query.message.reply_text(
+            "🎯 **Выберите новый тип анализа:**",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
     
-    # Показываем подтверждение выбора
-    confirmation_text = (
-        f"🎯 **Выбран тип анализа:**\n\n"
-        f"{analysis_info['icon']} **{analysis_info['name']}**\n\n"
-        f"📋 {analysis_info['description']}\n\n"
-        "⏳ Начинаю обработку документа..."
-    )
+    elif query.data == "cancel_analysis":
+        # ДОБАВЛЯЮ ОТСУТСТВУЮЩИЙ ОБРАБОТЧИК!
+        return await cancel_analysis(update, context)
     
-    await query.message.reply_text(
-        confirmation_text,
-        parse_mode='Markdown'
-    )
+    elif query.data == "back_to_menu":
+        # ДОБАВЛЯЮ ОТСУТСТВУЮЩИЙ ОБРАБОТЧИК!
+        # Возврат в главное меню через cancel_analysis
+        return await cancel_analysis(update, context)
     
-    # Переходим к обработке текста
-    return await start_text_processing(update, context)
+    elif query.data == "retry_upload":
+        # Повторная попытка загрузки файла
+        await query.message.reply_text(
+            "🔄 **Повторная загрузка**\n\n"
+            "Пожалуйста, загрузите документ заново:\n\n"
+            "📋 **Поддерживаемые форматы:**\n"
+            "• **Документы:** DOC, DOCX, PDF\n"
+            "• **Изображения:** JPG, PNG (сканы)\n"
+            "• **Максимальный размер:** 10 МБ",
+            parse_mode='Markdown'
+        )
+        return AnalysisStates.DOCUMENT_UPLOAD.value
+    
+    elif query.data == "back_to_upload":
+        # Возврат к началу загрузки документа
+        return await analyze_command(update, context)
+    
+    # КРИТИЧЕСКИ ВАЖНО: возвращаем состояние для ConversationHandler!
+    return AnalysisStates.ANALYSIS_TYPE_SELECTION.value
 
 
 async def start_text_processing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -392,8 +674,7 @@ async def start_text_processing(update: Update, context: ContextTypes.DEFAULT_TY
             "Попробуйте:\n"
             "• Загрузить файл еще раз\n"
             "• Использовать другой формат\n"
-            "• Обратиться в поддержку\n\n"
-            "Для повторной попытки используйте /analyze",
+            "• Обратиться в поддержку",
             parse_mode='Markdown'
         )
         return ConversationHandler.END
@@ -596,11 +877,22 @@ async def handle_additional_actions(update: Update, context: ContextTypes.DEFAUL
     elif query.data == "finish_analysis":
         # Завершение анализа
         context.user_data.clear()
+        
+        # Создаем клавиатуру для выбора дальнейших действий
+        keyboard = [
+            [InlineKeyboardButton("📊 Новый анализ", callback_data="start_analyze")],
+            [InlineKeyboardButton("💬 Консультация", callback_data="menu_consult")],
+            [InlineKeyboardButton("📄 Создать документ", callback_data="menu_create")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.message.reply_text(
             "✅ **Анализ завершен**\n\n"
             "Спасибо за использование AI-юриста!\n\n"
-            "🔄 Для нового анализа используйте /analyze\n"
-            "🏠 Главное меню: /start",
+            "Выберите дальнейшие действия:",
+            reply_markup=reply_markup,
             parse_mode='Markdown'
         )
         return ConversationHandler.END
@@ -660,7 +952,7 @@ async def cancel_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         await update.message.reply_text(
             "❌ Анализ документа отменен.\n"
-            "Для нового анализа используйте /analyze"
+            "Используйте кнопки ниже для выбора действий."
         )
     
     return ConversationHandler.END
@@ -746,7 +1038,7 @@ async def analyze_text_with_gigachat(analysis_type: str, text: str, filename: st
 • Убедитесь, что документ содержит читаемый текст
 • Обратитесь в поддержку, если проблема повторяется
 
-🔄 Попробуйте снова с командой /analyze"""
+🔄 Используйте кнопки ниже для дальнейших действий"""
 
 
 async def send_long_message(chat, text: str, **kwargs) -> None:
@@ -997,26 +1289,83 @@ async def extract_text_from_image(file_path: str) -> str:
     Извлечение текста из изображения с помощью OCR
     """
     try:
+        logger.info(f"Начинаем OCR обработку изображения: {file_path}")
+        
         # Проверяем доступность Tesseract
         if not is_tesseract_available():
+            logger.error("Tesseract OCR недоступен")
             raise Exception("OCR недоступен: требуется установка Tesseract OCR.\n"
-                          "Для Windows: скачайте с https://github.com/UB-Mannheim/tesseract/wiki\n"
                           "Для анализа изображений необходимо установить Tesseract OCR в системе.")
+        
+        # Проверяем существование файла
+        if not os.path.exists(file_path):
+            logger.error(f"Файл изображения не найден: {file_path}")
+            raise Exception("Файл изображения не найден")
+        
+        logger.info(f"Размер файла: {os.path.getsize(file_path)} байт")
         
         # Открываем изображение
         image = Image.open(file_path)
+        logger.info(f"Изображение открыто: {image.size}, режим: {image.mode}")
         
-        # Применяем OCR
-        extracted_text = pytesseract.image_to_string(image, lang='rus+eng')
+        # Конвертируем в RGB если нужно
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+            logger.info("Изображение конвертировано в RGB")
         
-        if not extracted_text.strip():
-            raise Exception("OCR не смог распознать текст на изображении")
+        # Улучшаем качество изображения для лучшего OCR
+        # Увеличиваем размер если изображение маленькое
+        width, height = image.size
+        if width < 1000 or height < 1000:
+            scale_factor = max(1000 / width, 1000 / height)
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            logger.info(f"Изображение увеличено до {new_width}x{new_height}")
         
+        # Применяем OCR с разными настройками
+        logger.info("Применяем OCR...")
+        
+        # Пробуем несколько конфигураций OCR
+        ocr_configs = [
+            '--psm 3',  # Полностью автоматическая сегментация страницы (по умолчанию)
+            '--psm 6',  # Единый блок текста
+            '--psm 4',  # Одна колонка текста различных размеров
+        ]
+        
+        extracted_text = ""
+        for config in ocr_configs:
+            try:
+                text = pytesseract.image_to_string(image, lang='rus+eng', config=config)
+                if text and len(text.strip()) > len(extracted_text.strip()):
+                    extracted_text = text
+                    logger.info(f"OCR успешен с конфигурацией {config}, длина текста: {len(text.strip())}")
+            except Exception as e:
+                logger.warning(f"OCR с конфигурацией {config} не удался: {e}")
+                continue
+        
+        if not extracted_text or len(extracted_text.strip()) < 5:
+            logger.warning(f"OCR вернул мало текста: '{extracted_text[:100]}...'")
+            
+            # Попробуем только английский язык
+            try:
+                text_eng = pytesseract.image_to_string(image, lang='eng')
+                if len(text_eng.strip()) > len(extracted_text.strip()):
+                    extracted_text = text_eng
+                    logger.info(f"OCR с английским языком дал лучший результат: {len(text_eng.strip())}")
+            except Exception as e:
+                logger.warning(f"OCR только с английским не удался: {e}")
+            
+            # Если все еще мало текста, возвращаем что есть с предупреждением
+            if len(extracted_text.strip()) < 5:
+                return f"⚠️ OCR распознал очень мало текста.\n\nВозможные причины:\n• Плохое качество изображения\n• Неразборчивый текст\n• Необычный шрифт\n\nРаспознанный текст:\n{extracted_text.strip()}"
+        
+        logger.info(f"OCR завершен успешно, итоговая длина: {len(extracted_text.strip())}")
         return extracted_text
         
     except Exception as e:
-        logger.error(f"Ошибка OCR для изображения: {e}")
-        raise Exception(f"Не удалось распознать текст на изображении: {str(e)}")
+        logger.error(f"Критическая ошибка OCR для изображения {file_path}: {e}")
+        return f"❌ Ошибка OCR: {str(e)}\n\nПопробуйте:\n• Загрузить изображение лучшего качества\n• Использовать более контрастное изображение\n• Убедиться что текст четко виден"
 
 
 def is_tesseract_available() -> bool:
@@ -1052,8 +1401,52 @@ def clean_extracted_text(text: str) -> str:
     # Убираем пробелы в начале и конце всего текста
     cleaned = cleaned.strip()
     
-    # Проверяем минимальную длину
-    if len(cleaned) < 10:
-        raise Exception("Извлеченный текст слишком короткий")
+    # Для OCR результатов не требуем минимальную длину
+    # Возвращаем текст как есть, даже если он короткий
+    return cleaned
+
+def create_analysis_keyboard():
+    """Создает клавиатуру для выбора типа анализа"""
+    keyboard = []
     
-    return cleaned 
+    # Добавляем кнопку "Краткое описание" первой
+    keyboard.append([InlineKeyboardButton(
+        ANALYSIS_TYPES['document_summary']['name'], 
+        callback_data="analysis_type_document_summary"
+    )])
+    
+    # Добавляем остальные типы анализа
+    for analysis_type, info in ANALYSIS_TYPES.items():
+        if analysis_type != 'document_summary':  # Пропускаем, так как уже добавили
+            keyboard.append([InlineKeyboardButton(
+                info['name'], 
+                callback_data=f"analysis_type_{analysis_type}"
+            )])
+    
+    # Кнопки управления
+    keyboard.extend([
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+    ])
+    
+    return InlineKeyboardMarkup(keyboard) 
+
+def create_other_analysis_keyboard():
+    """Создает клавиатуру с остальными типами анализа (без краткого описания)"""
+    keyboard = []
+    
+    # Добавляем все типы анализа кроме document_summary
+    for analysis_type, info in ANALYSIS_TYPES.items():
+        if analysis_type != 'document_summary':
+            keyboard.append([InlineKeyboardButton(
+                info['name'], 
+                callback_data=f"analysis_type_{analysis_type}"
+            )])
+    
+    # Кнопки управления
+    keyboard.extend([
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+    ])
+    
+    return InlineKeyboardMarkup(keyboard) 
