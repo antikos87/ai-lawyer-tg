@@ -323,7 +323,7 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         f"📄 **Документ получен:** {file_name}\n\n"
         f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
-        f"📝 **Текст извлечен:** {len(extracted_text)} символов\n\n"
+        f"📝 **Текст извлечен:** {len(context.user_data['document_text'])} символов\n\n"
         "**Выберите тип анализа:**",
         reply_markup=keyboard,
         parse_mode='Markdown'

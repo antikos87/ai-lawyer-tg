@@ -522,7 +522,6 @@ async def back_to_subtypes(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     await query.message.reply_text(
         f"📄 **{doc_info['name']}**\n\n"
-        f"{doc_info['description']}\n\n"
         "**Выберите подтип документа:**",
         reply_markup=reply_markup,
         parse_mode='Markdown'
