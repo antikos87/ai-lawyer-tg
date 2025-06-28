@@ -35,6 +35,7 @@ class AnalysisStates(Enum):
     ANALYSIS_PROCESSING = 3
     RESULTS_REVIEW = 4
     ADDITIONAL_ACTIONS = 5
+    MULTIPLE_IMAGES = 6  # Новое состояние для загрузки нескольких изображений
 
 
 # Поддерживаемые типы файлов
@@ -136,8 +137,10 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Обработчик загрузки документа
+    Обработчик загрузки документа с поддержкой множественных изображений
     """
+    logger.info(f"Начало обработки загрузки документа от пользователя {update.effective_user.id}")
+    
     # Показываем индикатор обработки
     await update.message.chat.send_action(ChatAction.TYPING)
     
@@ -196,6 +199,8 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
         
     # Обработка изображения
     else:  # photo
+        logger.info(f"Обработка изображения от пользователя {update.effective_user.id}")
+        
         # Берем изображение наилучшего качества
         photo_file = photo[-1]
         file_size = photo_file.file_size
@@ -206,6 +211,7 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
         
         # Проверяем размер
         if file_size > MAX_FILE_SIZE:
+            logger.warning(f"Изображение слишком большое: {file_size} байт от пользователя {update.effective_user.id}")
             await update.message.reply_text(
                 f"❌ **Изображение слишком большое**\n\n"
                 f"Размер: {file_size / (1024*1024):.1f} МБ\n"
@@ -214,6 +220,59 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode='Markdown'
             )
             return AnalysisStates.DOCUMENT_UPLOAD.value
+        
+        # Проверяем, есть ли уже загруженные изображения для объединения
+        if 'uploaded_images' not in context.user_data:
+            context.user_data['uploaded_images'] = []
+        
+        # Добавляем текущее изображение к списку
+        context.user_data['uploaded_images'].append({
+            'file_id': file_id,
+            'file_name': file_name,
+            'file_size': file_size,
+            'file_extension': file_extension,
+            'file_type': file_type
+        })
+        
+        # Если это первое изображение, предлагаем добавить еще
+        if len(context.user_data['uploaded_images']) == 1:
+            keyboard = [
+                [InlineKeyboardButton("📷 Добавить еще изображение", callback_data="add_more_images")],
+                [InlineKeyboardButton("✅ Продолжить с одним изображением", callback_data="process_single_image")],
+                [InlineKeyboardButton("❌ Отмена", callback_data="cancel_analysis")]
+            ]
+            
+            await update.message.reply_text(
+                f"📷 **Изображение загружено!**\n\n"
+                f"📊 **Размер:** {file_size / (1024*1024):.1f} МБ\n\n"
+                "💡 **Совет:** Если договор состоит из нескольких страниц, "
+                "вы можете загрузить все изображения подряд для лучшего распознавания текста.\n\n"
+                "**Что делаем дальше?**",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return AnalysisStates.MULTIPLE_IMAGES.value
+        
+        # Если уже есть изображения, добавляем к коллекции
+        else:
+            total_images = len(context.user_data['uploaded_images'])
+            total_size = sum(img['file_size'] for img in context.user_data['uploaded_images'])
+            
+            keyboard = [
+                [InlineKeyboardButton("📷 Добавить еще изображение", callback_data="add_more_images")],
+                [InlineKeyboardButton("✅ Обработать все изображения", callback_data="process_all_images")],
+                [InlineKeyboardButton("❌ Отмена", callback_data="cancel_analysis")]
+            ]
+            
+            await update.message.reply_text(
+                f"📷 **Изображение {total_images} добавлено!**\n\n"
+                f"📊 **Всего изображений:** {total_images}\n"
+                f"📊 **Общий размер:** {total_size / (1024*1024):.1f} МБ\n\n"
+                "**Продолжаем добавлять или обрабатываем?**",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return AnalysisStates.MULTIPLE_IMAGES.value
     
     # Сохраняем информацию о файле
     context.user_data['file_info'] = {
@@ -281,23 +340,43 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
         file_icon = "🖼️" if file_type == 'image' else "📄"
         success_text = "✅ **Документ обработан успешно!**\n\n"
         
+        # Безопасное имя файла для Markdown
+        safe_file_name = escape_markdown(file_name)
+        
         if file_type == 'image':
-            success_text += f"{file_icon} **Изображение:** {file_name}\n"
+            success_text += f"{file_icon} **Изображение:** `{safe_file_name}`\n"
             success_text += f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
             success_text += f"🔤 **Текст распознан:** {len(extracted_text)} символов\n"
             if "OCR распознал очень мало текста" in extracted_text:
                 success_text += "\n⚠️ *Распознано мало текста, но анализ возможен*"
         else:
-            success_text += f"{file_icon} **Файл:** {file_name}\n"
+            success_text += f"{file_icon} **Файл:** `{safe_file_name}`\n"
             success_text += f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
             success_text += f"📝 **Текст извлечен:** {len(extracted_text)} символов"
         
-        await processing_message.edit_text(
-            success_text,
-            parse_mode='Markdown'
-        )
+        try:
+            await processing_message.edit_text(
+                success_text,
+                parse_mode='Markdown'
+            )
+        except Exception as edit_error:
+            logger.warning(f"Ошибка обновления сообщения с Markdown: {edit_error}")
+            # Пытаемся без форматирования
+            try:
+                await processing_message.edit_text(
+                    success_text.replace('**', '').replace('`', '').replace('*', '')
+                )
+            except Exception as edit_error2:
+                logger.error(f"Критическая ошибка обновления сообщения: {edit_error2}")
+                # Продолжаем работу даже если не удалось обновить сообщение
         
     except Exception as e:
+        # Подробное логирование ошибки
+        logger.error(f"Критическая ошибка обработки файла для пользователя {update.effective_user.id}")
+        logger.error(f"Тип ошибки: {type(e).__name__}")
+        logger.error(f"Сообщение ошибки: {str(e)}")
+        logger.error(f"Информация о файле: {context.user_data.get('file_info', 'Нет данных')}")
+        
         # Создаем клавиатуру с навигацией для критической ошибки
         error_keyboard = [
             [InlineKeyboardButton("🔄 Попробовать еще раз", callback_data="retry_upload")],
@@ -305,13 +384,37 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
         ]
         
+        # Определяем тип ошибки для более точного сообщения
+        if "timeout" in str(e).lower() or "time" in str(e).lower():
+            error_message = (
+                "❌ **Превышено время обработки**\n\n"
+                "Файл слишком большой или сложный для обработки.\n\n"
+                "**Попробуйте:**\n"
+                "• Уменьшить размер файла\n"
+                "• Разбить документ на части\n"
+                "• Использовать другой формат"
+            )
+        elif "memory" in str(e).lower() or "размер" in str(e).lower():
+            error_message = (
+                "❌ **Файл слишком большой**\n\n"
+                "Не хватает ресурсов для обработки файла.\n\n"
+                "**Попробуйте:**\n"
+                "• Уменьшить размер файла\n"
+                "• Использовать сжатие\n"
+                "• Разбить на несколько частей"
+            )
+        else:
+            error_message = (
+                "❌ **Критическая ошибка обработки**\n\n"
+                "Произошла непредвиденная ошибка при обработке файла.\n\n"
+                "**Попробуйте:**\n"
+                "• Загрузить файл заново\n"
+                "• Использовать другой формат\n"
+                "• Обратиться в поддержку если проблема повторяется"
+            )
+        
         await processing_message.edit_text(
-            "❌ **Критическая ошибка обработки**\n\n"
-            "Произошла непредвиденная ошибка при обработке файла.\n\n"
-            "**Попробуйте:**\n"
-            "• Загрузить файл заново\n"
-            "• Использовать другой формат\n"
-            "• Обратиться в поддержку если проблема повторяется",
+            error_message,
             reply_markup=InlineKeyboardMarkup(error_keyboard),
             parse_mode='Markdown'
         )
@@ -320,14 +423,28 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
     # Предлагаем выбрать тип анализа
     keyboard = create_analysis_keyboard()
     
-    await update.message.reply_text(
-        f"📄 **Документ получен:** {file_name}\n\n"
-        f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
-        f"📝 **Текст извлечен:** {len(context.user_data['document_text'])} символов\n\n"
-        "**Выберите тип анализа:**",
-        reply_markup=keyboard,
-        parse_mode='Markdown'
-    )
+    # Безопасное имя файла
+    safe_file_name = escape_markdown(file_name)
+    
+    try:
+        await update.message.reply_text(
+            f"📄 **Документ получен:** `{safe_file_name}`\n\n"
+            f"📊 **Размер:** {file_size / 1024 / 1024:.1f} МБ\n"
+            f"📝 **Текст извлечен:** {len(context.user_data['document_text'])} символов\n\n"
+            "**Выберите тип анализа:**",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+    except Exception as send_error:
+        logger.warning(f"Ошибка отправки сообщения с Markdown: {send_error}")
+        # Отправляем без форматирования
+        await update.message.reply_text(
+            f"📄 Документ получен: {file_name}\n\n"
+            f"📊 Размер: {file_size / 1024 / 1024:.1f} МБ\n"
+            f"📝 Текст извлечен: {len(context.user_data['document_text'])} символов\n\n"
+            "Выберите тип анализа:",
+            reply_markup=keyboard
+        )
     
     return AnalysisStates.ANALYSIS_TYPE_SELECTION.value
 
@@ -413,6 +530,8 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                     analysis_type
                 )
                 
+                logger.info(f"Получен результат анализа, длина: {len(analysis_result)} символов")
+                
                 # Обновляем прогресс сообщение
                 await progress_msg.edit_text("✅ Анализ завершен!")
                 
@@ -422,13 +541,31 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                     [InlineKeyboardButton("✅ Завершить", callback_data="finish_analysis")]
                 ]
                 
-                await query.message.reply_text(
-                    analysis_result,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
-                )
+                # Отправляем результат с разбивкой на части если нужно
+                try:
+                    await send_long_message(
+                        query.message.chat,
+                        analysis_result,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode='Markdown'
+                    )
+                    logger.info("Результат анализа успешно отправлен пользователю")
+                except Exception as send_error:
+                    logger.error(f"Ошибка отправки с разбивкой: {send_error}")
+                    # Fallback: пытаемся отправить без форматирования
+                    try:
+                        await send_long_message(
+                            query.message.chat,
+                            analysis_result,
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
+                        logger.info("Результат анализа отправлен без Markdown")
+                    except Exception as send_error2:
+                        logger.error(f"Критическая ошибка отправки: {send_error2}")
+                        raise send_error2
                 return
             except Exception as e:
+                logger.error(f"ОШИБКА при анализе документа: {type(e).__name__}: {str(e)}")
                 await query.message.reply_text(
                     "❌ **Ошибка анализа**\n\n"
                     "Произошла ошибка при анализе документа.\n"
@@ -473,6 +610,8 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                 analysis_type
             )
             
+            logger.info(f"Получен результат анализа start_analysis, длина: {len(analysis_result)} символов")
+            
             # Обновляем прогресс сообщение
             await progress_msg.edit_text("✅ Анализ завершен!")
             
@@ -482,12 +621,30 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                 [InlineKeyboardButton("✅ Завершить", callback_data="finish_analysis")]
             ]
             
-            await query.message.reply_text(
-                analysis_result,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
+            # Отправляем результат с разбивкой на части если нужно
+            try:
+                await send_long_message(
+                    query.message.chat,
+                    analysis_result,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                logger.info("Результат анализа start_analysis успешно отправлен пользователю")
+            except Exception as send_error:
+                logger.error(f"Ошибка отправки start_analysis с разбивкой: {send_error}")
+                # Fallback: пытаемся отправить без форматирования
+                try:
+                    await send_long_message(
+                        query.message.chat,
+                        analysis_result,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    logger.info("Результат анализа start_analysis отправлен без Markdown")
+                except Exception as send_error2:
+                    logger.error(f"Критическая ошибка отправки start_analysis: {send_error2}")
+                    raise send_error2
         except Exception as e:
+            logger.error(f"ОШИБКА при анализе документа start_analysis: {type(e).__name__}: {str(e)}")
             await query.message.reply_text(
                 "❌ **Ошибка анализа**\n\n"
                 "Произошла ошибка при анализе документа.\n"
@@ -530,6 +687,26 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
+    
+    elif query.data == "add_more_images":
+        # Ждем загрузки еще одного изображения
+        await query.message.reply_text(
+            "📷 **Загрузите следующее изображение**\n\n"
+            "Отправьте еще одно изображение для добавления к анализу.\n\n"
+            "💡 **Совет:** Убедитесь что изображения четкие и текст хорошо виден.",
+            parse_mode='Markdown'
+        )
+        return AnalysisStates.DOCUMENT_UPLOAD.value
+    
+    elif query.data == "process_single_image":
+        # Обрабатываем одно изображение
+        logger.info(f"Обработка одного изображения от пользователя {update.effective_user.id}")
+        return await process_uploaded_images(update, context, single=True)
+    
+    elif query.data == "process_all_images":
+        # Обрабатываем все загруженные изображения
+        logger.info(f"Обработка {len(context.user_data.get('uploaded_images', []))} изображений от пользователя {update.effective_user.id}")
+        return await process_uploaded_images(update, context, single=False)
     
     elif query.data == "cancel_analysis":
         # ДОБАВЛЯЮ ОТСУТСТВУЮЩИЙ ОБРАБОТЧИК!
@@ -906,6 +1083,142 @@ async def handle_additional_actions(update: Update, context: ContextTypes.DEFAUL
     return AnalysisStates.RESULTS_REVIEW.value
 
 
+async def process_uploaded_images(update: Update, context: ContextTypes.DEFAULT_TYPE, single: bool = False) -> int:
+    """
+    Обработка загруженных изображений (одного или нескольких)
+    """
+    logger.info(f"Начало обработки изображений, single={single}, пользователь {update.effective_user.id}")
+    
+    uploaded_images = context.user_data.get('uploaded_images', [])
+    if not uploaded_images:
+        logger.error(f"Нет загруженных изображений для пользователя {update.effective_user.id}")
+        await update.callback_query.message.reply_text(
+            "❌ **Ошибка:** Нет загруженных изображений",
+            parse_mode='Markdown'
+        )
+        return AnalysisStates.DOCUMENT_UPLOAD.value
+    
+    # Если single=True, обрабатываем только первое изображение
+    images_to_process = [uploaded_images[0]] if single else uploaded_images
+    
+    logger.info(f"Обрабатываем {len(images_to_process)} изображений")
+    
+    # Показываем прогресс
+    progress_message = await update.callback_query.message.reply_text(
+        f"🔄 **Обрабатываю {len(images_to_process)} изображений...**\n\n"
+        f"📥 Загружаю файлы...",
+        parse_mode='Markdown'
+    )
+    
+    try:
+        extracted_texts = []
+        
+        for i, image_info in enumerate(images_to_process):
+            logger.info(f"Обработка изображения {i+1}/{len(images_to_process)}: {image_info['file_name']}")
+            
+            # Обновляем прогресс (используем безопасное имя файла)
+            try:
+                await progress_message.edit_text(
+                    f"🔄 **Обрабатываю изображения...**\n\n"
+                    f"📷 **Изображение {i+1}/{len(images_to_process)}**\n"
+                    f"🔍 Распознаю текст...",
+                    parse_mode='Markdown'
+                )
+            except Exception as edit_error:
+                logger.warning(f"Не удалось обновить прогресс: {edit_error}")
+                # Продолжаем без обновления прогресса
+            
+            try:
+                # Извлекаем текст из изображения
+                text = await extract_text_from_file(image_info)
+                if text and len(text.strip()) > 3:
+                    extracted_texts.append(f"--- Изображение {i+1}: {image_info['file_name']} ---\n{text}")
+                    logger.info(f"Текст извлечен из изображения {i+1}: {len(text)} символов")
+                else:
+                    logger.warning(f"Мало текста извлечено из изображения {i+1}")
+                    extracted_texts.append(f"--- Изображение {i+1}: {image_info['file_name']} ---\n⚠️ Текст не распознан или слишком мало")
+            
+            except Exception as e:
+                logger.error(f"Ошибка обработки изображения {i+1}: {e}")
+                extracted_texts.append(f"--- Изображение {i+1}: {image_info['file_name']} ---\n❌ Ошибка обработки: {str(e)}")
+        
+        # Объединяем весь извлеченный текст
+        combined_text = "\n\n".join(extracted_texts)
+        
+        if not combined_text or len(combined_text.strip()) < 10:
+            logger.warning(f"Мало текста извлечено из всех изображений: {len(combined_text)} символов")
+            
+            error_keyboard = [
+                [InlineKeyboardButton("🔄 Попробовать еще раз", callback_data="retry_upload")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+            ]
+            
+            await progress_message.edit_text(
+                "❌ **Не удалось распознать текст**\n\n"
+                "Из загруженных изображений извлечено слишком мало текста.\n\n"
+                "**Рекомендации:**\n"
+                "• Убедитесь что изображения четкие\n"
+                "• Текст должен быть хорошо виден\n"
+                "• Попробуйте лучшее освещение\n"
+                "• Используйте более высокое разрешение",
+                reply_markup=InlineKeyboardMarkup(error_keyboard),
+                parse_mode='Markdown'
+            )
+            return AnalysisStates.DOCUMENT_UPLOAD.value
+        
+        # Сохраняем объединенный текст
+        context.user_data['document_text'] = combined_text
+        
+        # Создаем file_info для совместимости
+        total_size = sum(img['file_size'] for img in images_to_process)
+        context.user_data['file_info'] = {
+            'file_name': f"{len(images_to_process)} изображений",
+            'file_size': total_size,
+            'file_type': 'image',
+            'file_extension': '.jpg'
+        }
+        
+        # Показываем успешный результат
+        await progress_message.edit_text(
+            f"✅ **Изображения обработаны!**\n\n"
+            f"📷 **Обработано:** {len(images_to_process)} изображений\n"
+            f"📊 **Общий размер:** {total_size / (1024*1024):.1f} МБ\n"
+            f"🔤 **Текст распознан:** {len(combined_text)} символов",
+            parse_mode='Markdown'
+        )
+        
+        # Предлагаем выбрать тип анализа
+        keyboard = create_analysis_keyboard()
+        
+        await update.callback_query.message.reply_text(
+            f"📄 **Документ получен:** {len(images_to_process)} изображений\n\n"
+            f"📊 **Размер:** {total_size / (1024*1024):.1f} МБ\n"
+            f"📝 **Текст извлечен:** {len(combined_text)} символов\n\n"
+            "**Выберите тип анализа:**",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+        
+        return AnalysisStates.ANALYSIS_TYPE_SELECTION.value
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка обработки изображений: {e}")
+        
+        error_keyboard = [
+            [InlineKeyboardButton("🔄 Попробовать еще раз", callback_data="retry_upload")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+        ]
+        
+        await progress_message.edit_text(
+            "❌ **Критическая ошибка**\n\n"
+            "Произошла ошибка при обработке изображений.\n"
+            "Попробуйте загрузить файлы заново.",
+            reply_markup=InlineKeyboardMarkup(error_keyboard),
+            parse_mode='Markdown'
+        )
+        return AnalysisStates.DOCUMENT_UPLOAD.value
+
+
 async def cancel_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отмена анализа документа и возврат в главное меню
@@ -998,14 +1311,25 @@ async def extract_text_from_file(file_info: Dict[str, Any]) -> str:
 
 async def analyze_text_with_gigachat(analysis_type: str, text: str, filename: str = "документ") -> str:
     """
-    Анализ текста через GigaChat API
+    Анализ текста через GigaChat API с улучшенным логированием
     """
+    logger.info(f"Начинаем анализ документа '{filename}' типа '{analysis_type}'")
+    logger.info(f"Размер текста для анализа: {len(text)} символов")
+    
     try:
         # Импортируем клиент GigaChat
         from ai_gigachat.client import gigachat_client
         
+        # Проверяем размер текста
+        if len(text) > 100000:  # 100KB текста
+            logger.warning(f"Большой объем текста для анализа: {len(text)} символов")
+        
+        # Засекаем время начала анализа
+        import time
+        start_time = time.time()
+        
         # Выполняем анализ через GigaChat API
-        logger.info(f"Начинаем анализ документа {filename} типа {analysis_type}")
+        logger.info("Отправляем запрос в GigaChat API...")
         
         analysis_result = await gigachat_client.analyze_document(
             document_text=text,
@@ -1013,30 +1337,67 @@ async def analyze_text_with_gigachat(analysis_type: str, text: str, filename: st
             filename=filename
         )
         
-        logger.info(f"Анализ документа {filename} успешно завершен")
+        # Засекаем время завершения
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        logger.info(f"Анализ документа '{filename}' успешно завершен за {duration:.2f} секунд")
+        logger.info(f"Размер результата анализа: {len(analysis_result)} символов")
+        
         return analysis_result
         
     except Exception as e:
-        logger.error(f"Ошибка при анализе документа {filename}: {e}")
+        logger.error(f"ОШИБКА при анализе документа '{filename}':")
+        logger.error(f"  Тип ошибки: {type(e).__name__}")
+        logger.error(f"  Сообщение: {str(e)}")
+        logger.error(f"  Тип анализа: {analysis_type}")
+        logger.error(f"  Размер текста: {len(text)} символов")
+        
+        # Проверяем тип ошибки для более точного ответа
+        error_type = type(e).__name__
+        error_message = str(e)
         
         # Возвращаем резервный ответ при ошибке
         analysis_info = ANALYSIS_TYPES[analysis_type]
         
+        if "timeout" in error_message.lower() or "time" in error_message.lower():
+            error_description = "Превышено время ожидания ответа от AI-сервиса"
+            suggestions = [
+                "• Попробуйте повторить анализ через 1-2 минуты",
+                "• Уменьшите размер документа если возможно",
+                "• Разбейте большой документ на части"
+            ]
+        elif "connection" in error_message.lower() or "network" in error_message.lower():
+            error_description = "Проблемы с сетевым соединением"
+            suggestions = [
+                "• Проверьте подключение к интернету",
+                "• Попробуйте повторить запрос через минуту",
+                "• Обратитесь в поддержку если проблема повторяется"
+            ]
+        elif "rate" in error_message.lower() or "limit" in error_message.lower():
+            error_description = "Превышен лимит запросов к AI-сервису"
+            suggestions = [
+                "• Подождите несколько минут перед повтором",
+                "• Попробуйте использовать меньший документ",
+                "• Обратитесь в поддержку для увеличения лимитов"
+            ]
+        else:
+            error_description = "Временные проблемы с AI-сервисом"
+            suggestions = [
+                "• Попробуйте повторить анализ через несколько минут",
+                "• Убедитесь, что документ содержит читаемый текст",
+                "• Обратитесь в поддержку, если проблема повторяется"
+            ]
+        
         return f"""❌ **Ошибка анализа документа**
+
 {analysis_info['icon']} **{analysis_info['name']}**
 📄 **Файл:** {filename}
 
-К сожалению, произошла ошибка при анализе документа.
-
-**Возможные причины:**
-• Временные проблемы с AI-сервисом
-• Документ слишком большой или сложный
-• Проблемы с сетевым соединением
+**Причина:** {error_description}
 
 **Что можно сделать:**
-• Попробуйте повторить анализ через несколько минут
-• Убедитесь, что документ содержит читаемый текст
-• Обратитесь в поддержку, если проблема повторяется
+{chr(10).join(suggestions)}
 
 🔄 Используйте кнопки ниже для дальнейших действий"""
 
@@ -1184,39 +1545,85 @@ async def extract_text_from_docx(file_path: str) -> str:
 
 async def extract_text_from_pdf(file_path: str) -> str:
     """
-    Извлечение текста из PDF файла (с поддержкой OCR для сканов)
+    Извлечение текста из PDF файла с таймаутами и улучшенным логированием
     """
+    logger.info(f"Начало извлечения текста из PDF: {file_path}")
+    
     extracted_text = ""
     
     try:
+        # Проверяем размер файла
+        file_size = os.path.getsize(file_path)
+        logger.info(f"Размер PDF файла: {file_size} байт ({file_size / (1024*1024):.1f} МБ)")
+        
+        # Устанавливаем таймаут в зависимости от размера файла
+        timeout_seconds = min(120, max(30, file_size // (1024 * 1024) * 10))  # 10 сек на МБ, мин 30, макс 120
+        logger.info(f"Установлен таймаут: {timeout_seconds} секунд")
+        
         # Сначала пытаемся извлечь текст напрямую через PyMuPDF (быстрее)
-        pdf_document = fitz.open(file_path)
+        logger.info("Попытка извлечения текста через PyMuPDF...")
         
-        for page_num in range(pdf_document.page_count):
-            page = pdf_document.get_page(page_num)
-            page_text = page.get_text()
+        async def extract_with_pymupdf():
+            pdf_document = fitz.open(file_path)
+            logger.info(f"PDF открыт, количество страниц: {pdf_document.page_count}")
             
-            if page_text.strip():
-                extracted_text += f"\n--- Страница {page_num + 1} ---\n{page_text}\n"
+            text_parts = []
+            for page_num in range(pdf_document.page_count):
+                logger.debug(f"Обработка страницы {page_num + 1}/{pdf_document.page_count}")
+                # Правильный API для PyMuPDF - используем индексацию
+                page = pdf_document[page_num]
+                page_text = page.get_text()
+                
+                if page_text.strip():
+                    text_parts.append(f"\n--- Страница {page_num + 1} ---\n{page_text}\n")
+                    logger.debug(f"Страница {page_num + 1}: извлечено {len(page_text)} символов")
+                else:
+                    logger.warning(f"Страница {page_num + 1}: текст не найден")
+            
+            pdf_document.close()
+            return "\n".join(text_parts)
         
-        pdf_document.close()
+        # Выполняем с таймаутом
+        try:
+            extracted_text = await asyncio.wait_for(extract_with_pymupdf(), timeout=timeout_seconds)
+            logger.info(f"PyMuPDF успешно завершен: {len(extracted_text)} символов")
+        except asyncio.TimeoutError:
+            logger.error(f"Таймаут PyMuPDF ({timeout_seconds}s), пробуем альтернативный метод")
+            raise Exception(f"Обработка PDF заняла слишком много времени (>{timeout_seconds}s)")
         
         # Если текста достаточно, возвращаем результат
         if len(extracted_text.strip()) > 50:
+            logger.info(f"Достаточно текста извлечено: {len(extracted_text)} символов")
             return extracted_text
         
         # Если текста мало, пробуем OCR
-        logger.info("Мало текста в PDF, пытаемся OCR...")
-        ocr_text = await extract_text_from_pdf_with_ocr(file_path)
-        
-        return ocr_text if ocr_text else extracted_text
+        logger.warning(f"Мало текста в PDF ({len(extracted_text)} символов), пытаемся OCR...")
+        try:
+            ocr_text = await asyncio.wait_for(
+                extract_text_from_pdf_with_ocr(file_path), 
+                timeout=timeout_seconds * 2  # OCR может занять больше времени
+            )
+            logger.info(f"OCR завершен: {len(ocr_text) if ocr_text else 0} символов")
+            return ocr_text if ocr_text else extracted_text
+        except asyncio.TimeoutError:
+            logger.error(f"Таймаут OCR ({timeout_seconds * 2}s)")
+            return extracted_text  # Возвращаем что есть
         
     except Exception as e:
         logger.error(f"Ошибка извлечения текста из PDF: {e}")
         
         # В случае ошибки пробуем альтернативный метод через PyPDF2
         try:
-            return await extract_text_from_pdf_pypdf2(file_path)
+            logger.info("Пробуем альтернативный метод PyPDF2...")
+            alt_text = await asyncio.wait_for(
+                extract_text_from_pdf_pypdf2(file_path), 
+                timeout=60
+            )
+            logger.info(f"PyPDF2 успешно завершен: {len(alt_text)} символов")
+            return alt_text
+        except asyncio.TimeoutError:
+            logger.error("Таймаут PyPDF2 (60s)")
+            raise Exception("PDF обработка заняла слишком много времени")
         except Exception as e2:
             logger.error(f"Ошибка альтернативного извлечения из PDF: {e2}")
             raise Exception(f"Не удалось обработать PDF файл: {str(e)}")
@@ -1379,6 +1786,22 @@ def is_tesseract_available() -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
         return False
+
+
+def escape_markdown(text: str) -> str:
+    """
+    Экранирует специальные символы Markdown
+    """
+    if not text:
+        return ""
+    
+    # Экранируем основные символы Markdown
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    
+    return text
 
 
 def clean_extracted_text(text: str) -> str:

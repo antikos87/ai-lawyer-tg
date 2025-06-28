@@ -22,7 +22,8 @@ from bot.document_handlers import (
     start_data_collection, process_answer, handle_document_review,
     start_document_editing, start_document_supplement, process_document_changes,
     regenerate_document, finalize_document, handle_document_rating,
-    back_to_types, back_to_subtypes, cancel_document_creation
+    back_to_types, back_to_subtypes, cancel_document_creation,
+    cancel_custom_answer, cancel_edit, cancel_supplement
 )
 
 from bot.analysis_handlers import (
@@ -376,6 +377,7 @@ def main() -> None:
                 CallbackQueryHandler(process_answer, pattern="^answer_"),
                 CallbackQueryHandler(process_answer, pattern="^custom_answer$"),
                 CallbackQueryHandler(process_answer, pattern="^prev_question$"),
+                CallbackQueryHandler(cancel_custom_answer, pattern="^cancel_custom$"),
                 CallbackQueryHandler(back_to_subtypes, pattern="^back_to_subtypes$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_answer),
                 CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")
@@ -394,6 +396,8 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_document_changes),
                 CallbackQueryHandler(start_document_editing, pattern="^edit_document$"),
                 CallbackQueryHandler(start_document_supplement, pattern="^supplement_document$"),
+                CallbackQueryHandler(cancel_edit, pattern="^cancel_edit$"),
+                CallbackQueryHandler(cancel_supplement, pattern="^cancel_supplement$"),
                 CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")
             ],
             DocumentStates.DOCUMENT_FINALIZATION.value: [
@@ -423,6 +427,13 @@ def main() -> None:
                 MessageHandler(filters.Document.ALL | filters.PHOTO, handle_document_upload),
                 CallbackQueryHandler(handle_analysis_type_selection, pattern="^retry_upload$"),
                 CallbackQueryHandler(handle_analysis_type_selection, pattern="^back_to_upload$"),
+                CallbackQueryHandler(cancel_analysis, pattern="^cancel_analysis$")
+            ],
+            AnalysisStates.MULTIPLE_IMAGES.value: [
+                MessageHandler(filters.PHOTO, handle_document_upload),  # Для добавления новых изображений
+                CallbackQueryHandler(handle_analysis_type_selection, pattern="^add_more_images$"),
+                CallbackQueryHandler(handle_analysis_type_selection, pattern="^process_single_image$"),
+                CallbackQueryHandler(handle_analysis_type_selection, pattern="^process_all_images$"),
                 CallbackQueryHandler(cancel_analysis, pattern="^cancel_analysis$")
             ],
             AnalysisStates.ANALYSIS_TYPE_SELECTION.value: [

@@ -537,14 +537,31 @@ async def cancel_document_creation(update: Update, context: ContextTypes.DEFAULT
     context.user_data.pop('document_type', None)
     context.user_data.pop('document_subtype', None)
     context.user_data.pop('generated_document', None)
+    context.user_data.pop('current_question', None)
     
     # Определяем откуда пришел запрос - callback или сообщение
     if update.callback_query:
         await update.callback_query.answer()
+        
+        # Возвращаемся в главное меню с кнопками
+        welcome_message = (
+            "🏛️ **AI-Юрист** — ваш персональный правовой помощник\n\n"
+            "💼 **Выберите нужную услугу:**"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💬 Юридическая консультация", callback_data="menu_consult")],
+            [InlineKeyboardButton("📄 Создание документов", callback_data="menu_create")],
+            [InlineKeyboardButton("📊 Анализ документов", callback_data="menu_analyze")],
+            [InlineKeyboardButton("ℹ️ Справка и поддержка", callback_data="menu_help")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await update.callback_query.message.reply_text(
-            "❌ **Документ отменен**\n\n"
-            "Создание документа прервано.\n\n"
-            "Используйте кнопки ниже для выбора действий."
+            welcome_message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
         )
         return ConversationHandler.END
     else:
@@ -553,6 +570,33 @@ async def cancel_document_creation(update: Update, context: ContextTypes.DEFAULT
             "Используйте кнопки ниже для выбора действий."
         )
     return ConversationHandler.END
+
+
+async def cancel_custom_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отмена ввода пользовательского ответа - возвращаемся к текущему вопросу"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Возвращаемся к текущему вопросу с вариантами ответов
+    return await ask_next_question(update, context, is_callback=True)
+
+
+async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отмена редактирования - возвращаемся к просмотру документа"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Возвращаемся к просмотру сгенерированного документа
+    return await show_generated_document(update, context, is_callback=True)
+
+
+async def cancel_supplement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отмена дополнения - возвращаемся к просмотру документа"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Возвращаемся к просмотру сгенерированного документа
+    return await show_generated_document(update, context, is_callback=True)
 
 
 async def process_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1464,7 +1508,7 @@ async def handle_document_rating(update: Update, context: ContextTypes.DEFAULT_T
             [InlineKeyboardButton("📋 Анализ документа", callback_data="analyze")],
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
         ]
-        
+    
     else:  # skip_rating
         thank_you_text = (
             "👍 **Понятно, спасибо!**\n\n"
