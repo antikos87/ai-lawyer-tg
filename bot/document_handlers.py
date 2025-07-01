@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes, ConversationHandler  # type: ignore
 from telegram.constants import ChatAction  # type: ignore
 
 from ai_gigachat.client import gigachat_client
+from bot.middleware import subscription_required, add_usage_info_to_response
 from .analysis_handlers import send_long_message, smart_split_message
 import config
 
@@ -665,6 +666,7 @@ async def save_answer_and_continue(update: Update, context: ContextTypes.DEFAULT
     return await ask_next_question(update, context, is_callback=is_callback)
 
 
+@subscription_required('document', 'создание документа')
 async def start_document_generation(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback: bool = False) -> int:
     """
     Начинает процесс генерации документа

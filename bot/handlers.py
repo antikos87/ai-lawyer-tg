@@ -10,6 +10,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup  # type:
 from telegram.ext import ContextTypes, ConversationHandler  # type: ignore
 from telegram.constants import ChatAction  # type: ignore
 from ai_gigachat.client import gigachat_client
+from bot.middleware import subscription_required, add_usage_info_to_response
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ async def category_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ConsultationStates.WAITING_QUESTION.value
 
 
+@subscription_required('consultation', 'консультация')
 async def process_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обработчик вопроса пользователя

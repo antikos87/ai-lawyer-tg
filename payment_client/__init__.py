@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Пакет для работы с YooKassa API
+Модуль для работы с YooKassa
 """
- 
+
 __version__ = "1.0.0" 

@@ -23,6 +23,7 @@ from PIL import Image
 import PyPDF2
 
 from ai_gigachat.client import gigachat_client
+from bot.middleware import subscription_required, add_usage_info_to_response
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return AnalysisStates.DOCUMENT_UPLOAD.value
 
 
+@subscription_required('analysis', 'анализ документа')
 async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обработчик загрузки документа с поддержкой множественных изображений
@@ -563,7 +565,7 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                     except Exception as send_error2:
                         logger.error(f"Критическая ошибка отправки: {send_error2}")
                         raise send_error2
-                return
+                return AnalysisStates.RESULTS_REVIEW.value
             except Exception as e:
                 logger.error(f"ОШИБКА при анализе документа: {type(e).__name__}: {str(e)}")
                 await query.message.reply_text(
@@ -629,7 +631,7 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='Markdown'
                 )
-                logger.info("Результат анализа start_analysis успешно отправлен пользователю")
+                logger.info("Результат анализа успешно отправлен")
             except Exception as send_error:
                 logger.error(f"Ошибка отправки start_analysis с разбивкой: {send_error}")
                 # Fallback: пытаемся отправить без форматирования
@@ -643,6 +645,7 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
                 except Exception as send_error2:
                     logger.error(f"Критическая ошибка отправки start_analysis: {send_error2}")
                     raise send_error2
+            return AnalysisStates.RESULTS_REVIEW.value
         except Exception as e:
             logger.error(f"ОШИБКА при анализе документа start_analysis: {type(e).__name__}: {str(e)}")
             await query.message.reply_text(
@@ -673,6 +676,7 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
+        return AnalysisStates.ANALYSIS_TYPE_SELECTION.value
     
     elif query.data == "change_analysis_type":
         # ДОБАВЛЯЮ ОТСУТСТВУЮЩИЙ ОБРАБОТЧИК!
@@ -687,6 +691,7 @@ async def handle_analysis_type_selection(update: Update, context: ContextTypes.D
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
+        return AnalysisStates.ANALYSIS_TYPE_SELECTION.value
     
     elif query.data == "add_more_images":
         # Ждем загрузки еще одного изображения
